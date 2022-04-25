@@ -23,7 +23,7 @@ from ..utils.utility import invert_order
 class INNE(BaseDetector):
     """ Isolation-based anomaly detection using nearest-neighbor ensembles.
 
-    isolate each instance x by building a hypersphere that covers x only in the training set.
+    isolate each instance by building a hypersphere that covers x only in the training set.
     The radius of the hypersphere is determined by the distance between x and its NN in the training set.
 
     Parameters
@@ -36,7 +36,7 @@ class INNE(BaseDetector):
 
             - If int, then draw `max_samples` samples.
             - If float, then draw `max_samples` * X.shape[0]` samples.
-            - If "auto", then `max_samples=min(16, n_samples)`.
+            - If "auto", then `max_samples=min(8, n_samples)`.
 
     contamination : float in (0., 0.5), optional (default=0.1)
         The amount of contamination of the data set, i.e. the proportion
@@ -74,7 +74,7 @@ class INNE(BaseDetector):
         ``threshold_`` on ``decision_scores_``.
     """
 
-    def __init__(self, n_estimators=200, max_samples="auto", contamination="auto", random_state=None):
+    def __init__(self, n_estimators=200, max_samples="auto", contamination=0.1, random_state=None):
         self.n_estimators = n_estimators
         self.max_samples = max_samples
         self.random_state = random_state
@@ -132,15 +132,11 @@ class INNE(BaseDetector):
                     "max_samples must be in (0, 1], got %r" % self.max_samples
                 )
             max_samples = int(self.max_samples * X.shape[0])
-
         self.max_samples_ = max_samples
 
         self._fit(X)
-        self.is_fitted_ = True
-
-        self.decision_scores_ = self.decision_function(X)
+        self.decision_scores_ = invert_order(self._score_samples(X))
         self._process_decision_scores()
-
         return self
 
     def _fit(self, X):
@@ -179,8 +175,8 @@ class INNE(BaseDetector):
             np.fill_diagonal(center_dist, np.inf)
             # redius of each hypersphere is the Nearest Neighbors distance of centroid.
             self._centroids_radius[i] = np.amin(center_dist, axis=1)
+            # Nearest Neighbors of centroids
             cnn_index = np.argmin(center_dist, axis=1)
-            # radius of Nearest Neighbors of centroids
             cnn_radius = self._centroids_radius[i][cnn_index]
 
             self._ratio[i] = 1 - cnn_radius / self._centroids_radius[i]
@@ -207,10 +203,10 @@ class INNE(BaseDetector):
             positive scores represent inliers.
         """
         # invert outlier scores. Outliers comes with higher outlier scores
+        check_is_fitted(self, ['decision_scores_', 'threshold_', 'labels_'])
+        return invert_order(self._score_samples(X))
 
-        return invert_order(self.score_samples(X))
-
-    def score_samples(self, X):
+    def _score_samples(self, X):
         """
         Opposite of the anomaly score defined in the original paper.
         The anomaly score of an input sample is computed as
@@ -228,26 +224,20 @@ class INNE(BaseDetector):
             The lower, the more abnormal.
         """
 
-        check_is_fitted(self, 'is_fitted_')
-
         # check data
         X = check_array(X, accept_sparse=False)
-        iso_score_set = np.empty([self.n_estimators, X.shape[0]])
+        isolation_scores = np.ones([self.n_estimators, X.shape[0]])
 
         # each test instance is evaluated against n_estimators sets of hyperspheres
         for i in range(self.n_estimators):
-            x_dists = euclidean_distances(
-                self._centroids[i], X, squared=True)
-            nn_center_dist = np.amin(x_dists, axis=0)
-            nn_center_index = np.argmin(x_dists, axis=0)
-            iso_score = self._ratio[i][nn_center_index]
-
-            # When an instance is not covered by all hyperspheres,
-            # it is assigned the maximum isolation score 1.
-            iso_score_set[i] = np.where(nn_center_dist <
-                                        self._centroids_radius[i][nn_center_index], iso_score, 1)
-
+            x_dists = euclidean_distances(X, self._centroids[i],  squared=True)
+            # find instances that are covered by at least one hypersphere.    
+            coverd_redius = np.where(
+                x_dists <= self._centroids_radius[i], self._centroids_radius[i], np.nan)
+            x_covered = np.where(~np.isnan(coverd_redius).all(axis=1))
+            # the centroid of the hypersphere covering x and having the smallest radius 
+            cnn_x = np.nanargmin(coverd_redius[x_covered], axis=1)
+            isolation_scores[i][x_covered] = self._ratio[i][cnn_x]
         # the isolation scores are averaged to produce the anomaly score
-        scores = np.mean(iso_score_set, axis=0)
-
+        scores = np.mean(isolation_scores, axis=0)
         return -scores
