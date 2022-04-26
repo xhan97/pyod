@@ -30,7 +30,7 @@ class INNE(BaseDetector):
     neighbourhood, enabling it to detect both global and local anomalies. INNE has 
     linear time complexity to efficiently handle large and high-dimensional datasets
     with complex distributions.
-    See :cite:`bandaragoda2018isolation` for details.
+    See :cite:`Bandaragoda2018Isolation` for details.
 
     Parameters
     ----------
