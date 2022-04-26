@@ -1,4 +1,6 @@
 from __future__ import division
+from pyod.utils.data import generate_data
+from pyod.models.inne import INNE
 from __future__ import print_function
 
 import os
@@ -20,8 +22,6 @@ from scipy.stats import rankdata
 # if pyod is installed, no need to use the following line
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-from pyod.models.inne import INNE
-from pyod.utils.data import generate_data
 
 class TestINNE(unittest.TestCase):
     def setUp(self):
@@ -139,11 +139,9 @@ class TestINNE(unittest.TestCase):
     def test_model_clone(self):
         clone_clf = clone(self.clf)
 
-
     def tearDown(self):
         pass
 
 
 if __name__ == '__main__':
     unittest.main()
-

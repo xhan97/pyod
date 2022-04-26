@@ -23,15 +23,21 @@ from ..utils.utility import invert_order
 class INNE(BaseDetector):
     """ Isolation-based anomaly detection using nearest-neighbor ensembles.
 
-    isolate each instance by building a hypersphere that covers x only in the training set.
-    The radius of the hypersphere is determined by the distance between x and its NN in the training set.
+    The INNE algorithm uses the nearest neighbour ensemble to isolate anomalies.
+    It partitions the data space into regions using a subsample and determines an
+    isolation score for each region. As each region adapts to local distribution,
+    the calculated isolation score is a local measure that is relative to the local
+    neighbourhood, enabling it to detect both global and local anomalies. INNE has 
+    linear time complexity to efficiently handle large and high-dimensional datasets
+    with complex distributions.
+    See :cite:`bandaragoda2018isolation` for details.
 
     Parameters
     ----------
     n_estimators : int, default=200
         The number of base estimators in the ensemble.
 
-    max_samples : int, default="auto"
+    max_samples : int or float, optional (default="auto")
         The number of samples to draw from X to train each base estimator.
 
             - If int, then draw `max_samples` samples.
@@ -52,7 +58,6 @@ class INNE(BaseDetector):
 
     Attributes
     ----------
-
     max_samples_ : integer
         The actual number of samples
 
@@ -74,21 +79,23 @@ class INNE(BaseDetector):
         ``threshold_`` on ``decision_scores_``.
     """
 
-    def __init__(self, n_estimators=200, max_samples="auto", contamination=0.1, random_state=None):
+    def __init__(self,
+                 n_estimators=200,
+                 max_samples="auto",
+                 contamination=0.1,
+                 random_state=None):
         self.n_estimators = n_estimators
         self.max_samples = max_samples
         self.random_state = random_state
         self.contamination = contamination
 
     def fit(self, X, y=None):
-        """
-        Fit estimator.
+        """Fit detector. y is ignored in unsupervised methods.
 
         Parameters
         ----------
-        X : array-like of shape (n_samples, n_features)
-            The input samples. Use ``dtype=np.float32`` for maximum
-            efficiency.
+        X : numpy array of shape (n_samples, n_features)
+            The input samples.
 
         y : Ignored
             Not used, present for API consistency by convention.
@@ -98,6 +105,7 @@ class INNE(BaseDetector):
         self : object
             Fitted estimator.
         """
+        # validate inputs X and y (optional)
 
         # Check data
         X = check_array(X, accept_sparse=False)
@@ -173,7 +181,7 @@ class INNE(BaseDetector):
             center_dist = euclidean_distances(
                 self._centroids[i], self._centroids[i], squared=True)
             np.fill_diagonal(center_dist, np.inf)
-            # redius of each hypersphere is the Nearest Neighbors distance of centroid.
+            # radius of each hypersphere is the Nearest Neighbors distance of centroid.
             self._centroids_radius[i] = np.amin(center_dist, axis=1)
             # Nearest Neighbors of centroids
             cnn_index = np.argmin(center_dist, axis=1)
@@ -183,34 +191,31 @@ class INNE(BaseDetector):
         return self
 
     def decision_function(self, X):
-        """
-        Average anomaly score of X of the base classifiers.
+        """Predict raw anomaly score of X using the fitted detector.
 
-        The anomaly score of an input sample is computed as
-        the mean anomaly score of the .
+        The anomaly score of an input sample is computed based on different
+        detector algorithms. For consistency, outliers are assigned with
+        larger anomaly scores.
 
         Parameters
         ----------
-        X : array-like of shape (n_samples, n_features)
-            The input samples. Internally, it will be converted to
-            ``dtype=np.float32``.
+        X : numpy array of shape (n_samples, n_features)
+            The training input samples. 
 
         Returns
         -------
-        scores : ndarray of shape (n_samples,)
+        anomaly_scores : numpy array of shape (n_samples,)
             The anomaly score of the input samples.
-            The lower, the more abnormal. Negative scores represent outliers,
-            positive scores represent inliers.
         """
-        # invert outlier scores. Outliers comes with higher outlier scores
         check_is_fitted(self, ['decision_scores_', 'threshold_', 'labels_'])
+        # invert outlier scores. Outliers comes with higher outlier scores
         return invert_order(self._score_samples(X))
 
     def _score_samples(self, X):
         """
         Opposite of the anomaly score defined in the original paper.
         The anomaly score of an input sample is computed as
-        the mean anomaly score of the trees in the forest.
+        the mean anomaly score over all set of hyperspheres.
 
         Parameters
         ----------
@@ -231,12 +236,12 @@ class INNE(BaseDetector):
         # each test instance is evaluated against n_estimators sets of hyperspheres
         for i in range(self.n_estimators):
             x_dists = euclidean_distances(X, self._centroids[i],  squared=True)
-            # find instances that are covered by at least one hypersphere.    
-            coverd_redius = np.where(
+            # find instances that are covered by at least one hypersphere.
+            cover_radius = np.where(
                 x_dists <= self._centroids_radius[i], self._centroids_radius[i], np.nan)
-            x_covered = np.where(~np.isnan(coverd_redius).all(axis=1))
-            # the centroid of the hypersphere covering x and having the smallest radius 
-            cnn_x = np.nanargmin(coverd_redius[x_covered], axis=1)
+            x_covered = np.where(~np.isnan(cover_radius).all(axis=1))
+            # the centroid of the hypersphere covering x and having the smallest radius
+            cnn_x = np.nanargmin(cover_radius[x_covered], axis=1)
             isolation_scores[i][x_covered] = self._ratio[i][cnn_x]
         # the isolation scores are averaged to produce the anomaly score
         scores = np.mean(isolation_scores, axis=0)
